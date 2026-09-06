@@ -1,0 +1,9 @@
+Package: com.local.spotifyeqpro
+Name: SpotifyEQPro
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: Experimental 10-band aggressive AUNBandEQ tweak for sideloaded Spotify.
+Maintainer: local
+Author: local
+Section: Tweaks
+Depends: mobilesubstrate
