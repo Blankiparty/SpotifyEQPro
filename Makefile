@@ -8,6 +8,5 @@ TWEAK_NAME = SpotifyEQPro
 SpotifyEQPro_FILES = Tweak.m
 SpotifyEQPro_CFLAGS = -fobjc-arc -O2
 SpotifyEQPro_FRAMEWORKS = Foundation UIKit AudioToolbox
-SpotifyEQPro_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
