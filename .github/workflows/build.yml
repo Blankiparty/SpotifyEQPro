@@ -28,7 +28,16 @@ jobs:
           DYLIB="$(find .theos/obj -name 'SpotifyEQPro.dylib' -type f | head -1)"
           test -n "$DYLIB"
           cp "$DYLIB" output/SpotifyEQPro.dylib
+
+          # Make the dependency usable inside a sideloaded app bundle.
+          install_name_tool -change \
+            /Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate \
+            @rpath/CydiaSubstrate.framework/CydiaSubstrate \
+            output/SpotifyEQPro.dylib
+          install_name_tool -id @rpath/SpotifyEQPro.dylib output/SpotifyEQPro.dylib
+
           file output/SpotifyEQPro.dylib
+          otool -L output/SpotifyEQPro.dylib
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
