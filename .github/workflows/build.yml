@@ -1,49 +1,54 @@
-name: Build SpotifyEQPro dylib
+name: Build SpotifyEQPro jailed
 
 on:
   workflow_dispatch:
   push:
     paths:
       - "Tweak.m"
+      - "EQPAudio.h"
       - "Makefile"
-      - "SpotifyEQPro.plist"
+      - "scripts/**"
       - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
+      - name: Test real Apple AudioUnit
+        run: |
+          mkdir -p output
+          xcrun clang -fobjc-arc -O2 scripts/test_audio.m -framework Foundation -framework AudioToolbox -o output/test_audio
+          output/test_audio
       - name: Setup Theos
         uses: beerpiss/theos-action@v1
         with:
           theos-sdks: https://github.com/theos/sdks
-
-      - name: Build
+      - name: Build jailed library
         run: |
           make clean
-          make FINALPACKAGE=1
-          mkdir -p output
+          make -j$(sysctl -n hw.ncpu) FINALPACKAGE=1
           DYLIB="$(find .theos/obj -name 'SpotifyEQPro.dylib' -type f | head -1)"
           test -n "$DYLIB"
           cp "$DYLIB" output/SpotifyEQPro.dylib
-
-          # Keep a sideload-friendly install name. Only rewrite Substrate if a future build links it.
-          if otool -L output/SpotifyEQPro.dylib | grep -q '/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate'; then
-            install_name_tool -change \
-              /Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate \
-              @rpath/CydiaSubstrate.framework/CydiaSubstrate \
-              output/SpotifyEQPro.dylib
-          fi
           install_name_tool -id @rpath/SpotifyEQPro.dylib output/SpotifyEQPro.dylib
-
+          codesign --force --sign - output/SpotifyEQPro.dylib
           file output/SpotifyEQPro.dylib
-          otool -L output/SpotifyEQPro.dylib
-
-      - name: Upload dylib
+          otool -L output/SpotifyEQPro.dylib | tee output/dependencies.txt
+          if grep -Ei 'substrate|substitute|libhooker|/var/jb|/Library/Frameworks' output/dependencies.txt; then
+            echo "Jailbreak dependency found" >&2
+            exit 1
+          fi
+          printf '%s\n' "$GITHUB_SHA" > output/commit.txt
+      - name: Upload tested library
         uses: actions/upload-artifact@v4
         with:
-          name: SpotifyEQPro-dylib
-          path: output/SpotifyEQPro.dylib
+          name: SpotifyEQPro-${{ github.sha }}
+          path: |
+            output/SpotifyEQPro.dylib
+            output/dependencies.txt
+            output/commit.txt
           if-no-files-found: error

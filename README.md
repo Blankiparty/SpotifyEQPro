@@ -1,44 +1,41 @@
-# SpotifyEQPro – one-click GitHub build
+# SpotifyEQPro 0.2 — jailed test build
 
-This project builds a real iOS `SpotifyEQPro.dylib` on a GitHub macOS runner.
+A ten-band equalizer and editable custom presets for the EeveeSpotify IPA supplied for this project. No jailbreak, Substrate, inline code patches, global C-function hooks, or external tweak loader are required by SpotifyEQPro. The dylib is embedded into the app before normal sideload signing.
 
-## What it does
+## Features
 
-- Replaces Spotify's 6-band model with 10 bands:
-  31 / 63 / 125 / 250 / 500 / 1k / 2k / 4k / 8k / 16k Hz.
-- Keeps Spotify's existing Equalizer screen.
-- Bottom of a slider: values at about -12 dB are converted to -96 dB ("near kill").
-- Positive gain is expanded, capped at +24 dB.
-- 31 Hz = low shelf; 16 kHz = high shelf; middle bands = parametric.
-- Bass bands receive the strongest positive expansion.
+- EQ preset button in the full-size Now Playing screen.
+- Replacement equalizer page with 31 / 63 / 125 / 250 / 500 Hz and 1 / 2 / 4 / 8 / 16 kHz controls.
+- Actual dB values, in 0.5 dB steps, with the requested -96 to +24 range intersected with the live AudioUnit's reported limits. Long-press a band for minimum, zero, or maximum.
+- User-editable presets in place of the stock selection: save, rename, overwrite, delete. Initial custom curves: Neutral, Sub Bass, Punch, Stimmen, Brillant.
+- Persistent controls and presets in the app sandbox.
+- Optional conservative headroom compensation, capped at -96 dB. This is not a limiter and does not guarantee clipping prevention for every extreme combination.
+- Status and shareable diagnostics in the EQ page.
 
-## Build on GitHub
+## Audio integration
 
-1. Create a new PRIVATE GitHub repository.
-2. Upload the CONTENTS of this folder (including `.github`).
-3. Open the repository's **Actions** tab.
-4. Open **Build SpotifyEQPro dylib**.
-5. Press **Run workflow**.
-6. When it finishes, open the run and download the artifact `SpotifyEQPro-dylib`.
-7. Unzip the artifact. Inside is `SpotifyEQPro.dylib`.
+This version was matched against the Objective-C metadata and audio-driver implementation in the supplied IPA (bundle ID `com.spotify.client`, reported version `2.5.13`, iOS 15 minimum). It chooses the existing AudioUnit path using `SPTEqualizer_EqualizerImplProperties.useCoreEqualizer` and replaces `SPTEqualizerModel.applyEqualizerToAudioUnit:` after checking its exact runtime signature. It leaves Spotify's six-element model arrays intact; the custom UI and audio parameters have their own ten-element state.
 
-## Inject with Sideloadly
+Updates go through Spotify's `applyEqualizer:` driver scheduling and its `performWithEqualizerUnit:` path. Raw AudioUnit pointers are never cached and no playing unit is uninitialized. The configuration checks every parameter write and gain readback. It reports failures rather than pretending audio was applied. The low and high bands are shelves; middle bands are one-octave parametric filters. -96 dB is deep attenuation at the filter's target, not a complete spectral mute. Spotify Connect playback on another device is not processed.
 
-Use your original EeveeSpotify IPA as input. In Sideloadly's advanced options add/inject
-`SpotifyEQPro.dylib`, then sign/install normally.
+## Build and package
 
-Do not inject the old SpotifyEQ10 at the same time: this project already contains the
-10-band model hook.
+GitHub Actions first runs the shared audio implementation against Apple's macOS NBandEQ, measuring a 1 kHz boost/cut and checking ten-band configuration and bypass. It then builds an arm64 iOS 15 dylib with Theos and rejects jailbreak dependencies. This macOS test does not replace an iPhone listening and UI test.
 
-## Important
+Download the artifact for the exact commit. Package it with the supplied base IPA:
 
-This is experimental. Spotify private class names and its audio path can change between
-versions. If Spotify crashes, remove this dylib and reinstall your known-good EeveeSpotify IPA.
+```sh
+python3 scripts/package_ipa.py base.ipa SpotifyEQPro.dylib SpotifyEQPro-0.2-test.ipa
+```
 
-The -96 dB behavior is not a mathematically perfect brick-wall mute of an entire frequency
-range. It is a very deep attenuation of the selected EQ band. A true band-stop mode needs
-separate UI semantics because Apple's BandStop filter does not use the Gain parameter in
-the same way as a parametric band.
+The packager only inserts an `@executable_path/Frameworks/SpotifyEQPro.dylib` dependency into available Mach-O header padding and embeds the built library. It fails if safe header padding is unavailable. Existing EeveeSpotify files are preserved. The resulting IPA must be signed by your normal sideloading tool/account before installation; an ad-hoc signature alone cannot authorize a jailed iPhone installation.
 
-Very large boosts can clip or damage hearing/headphones at high playback volume. Start at
-low volume.
+## Device acceptance checks
+
+1. Launch on a non-jailbroken iPhone; play a downloaded or streamed song locally.
+2. Open full-size Now Playing; tap EQ, select a preset, then open the editor.
+3. Confirm the status says the ten-band EQ is connected; compare a 1 kHz boost/cut at low listening volume, initially with headroom disabled for that comparison.
+4. Save and rename a preset, restart the app, and confirm it persists. Delete it through its context menu.
+5. Open Spotify's normal EQ settings entry; confirm the custom page appears and the stock list is absent.
+6. Change tracks, pause/resume, change Bluetooth output, and background/foreground the app.
+7. If a problem occurs, share `Diagnose teilen` from the editor. Without device execution, the UI placement and this Spotify build's runtime behavior remain unverified.
