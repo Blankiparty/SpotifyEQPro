@@ -14,13 +14,14 @@ static OSStatus input(void *ref, AudioUnitRenderActionFlags *flags, const AudioT
     return noErr;
 }
 static double renderRMS(AudioUnit unit) {
-    float samples[1024]; AudioBufferList buffers={.mNumberBuffers=1,.mBuffers={{2,sizeof(samples),samples}}};
+    float left[512],right[512];
+    struct {UInt32 mNumberBuffers;AudioBuffer mBuffers[2];} buffers={2,{{1,sizeof(left),left},{1,sizeof(right),right}}};
     double energy=0;unsigned count=0;
     for (int k=0;k<100;k++) {
         AudioUnitRenderActionFlags flags=0; AudioTimeStamp time={.mSampleTime=k*512,.mFlags=kAudioTimeStampSampleTimeValid};
-        buffers.mBuffers[0].mDataByteSize=sizeof(samples);
-        assert(AudioUnitRender(unit,&flags,&time,0,512,&buffers)==noErr);
-        if (k>50) for(int i=0;i<1024;i++){assert(isfinite(samples[i]));energy+=samples[i]*samples[i];count++;}
+        buffers.mBuffers[0].mDataByteSize=sizeof(left);buffers.mBuffers[1].mDataByteSize=sizeof(right);
+        assert(AudioUnitRender(unit,&flags,&time,0,512,(AudioBufferList *)&buffers)==noErr);
+        if (k>50) for(int i=0;i<512;i++){assert(isfinite(left[i]) && isfinite(right[i]));energy+=left[i]*left[i]+right[i]*right[i];count+=2;}
     }
     return sqrt(energy/count);
 }
@@ -28,7 +29,7 @@ int main(void) {
     @autoreleasepool {
         AudioComponentDescription desc={.componentType=kAudioUnitType_Effect,.componentSubType=kAudioUnitSubType_NBandEQ,.componentManufacturer=kAudioUnitManufacturer_Apple};
         AudioUnit unit=NULL;assert(AudioComponentInstanceNew(AudioComponentFindNext(NULL,&desc),&unit)==noErr);
-        AudioStreamBasicDescription format={.mSampleRate=48000,.mFormatID=kAudioFormatLinearPCM,.mFormatFlags=kAudioFormatFlagIsFloat|kAudioFormatFlagIsPacked,.mBytesPerPacket=8,.mFramesPerPacket=1,.mBytesPerFrame=8,.mChannelsPerFrame=2,.mBitsPerChannel=32};
+        AudioStreamBasicDescription format={.mSampleRate=48000,.mFormatID=kAudioFormatLinearPCM,.mFormatFlags=kAudioFormatFlagIsFloat|kAudioFormatFlagIsPacked|kAudioFormatFlagIsNonInterleaved,.mBytesPerPacket=4,.mFramesPerPacket=1,.mBytesPerFrame=4,.mChannelsPerFrame=2,.mBitsPerChannel=32};
         assert(AudioUnitSetProperty(unit,kAudioUnitProperty_StreamFormat,kAudioUnitScope_Input,0,&format,sizeof(format))==noErr);
         assert(AudioUnitSetProperty(unit,kAudioUnitProperty_StreamFormat,kAudioUnitScope_Output,0,&format,sizeof(format))==noErr);
         AURenderCallbackStruct cb={input,NULL};assert(AudioUnitSetProperty(unit,kAudioUnitProperty_SetRenderCallback,kAudioUnitScope_Input,0,&cb,sizeof(cb))==noErr);
