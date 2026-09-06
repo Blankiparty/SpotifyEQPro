@@ -29,11 +29,13 @@ jobs:
           test -n "$DYLIB"
           cp "$DYLIB" output/SpotifyEQPro.dylib
 
-          # Make the dependency usable inside a sideloaded app bundle.
-          install_name_tool -change \
-            /Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate \
-            @rpath/CydiaSubstrate.framework/CydiaSubstrate \
-            output/SpotifyEQPro.dylib
+          # Keep a sideload-friendly install name. Only rewrite Substrate if a future build links it.
+          if otool -L output/SpotifyEQPro.dylib | grep -q '/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate'; then
+            install_name_tool -change \
+              /Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate \
+              @rpath/CydiaSubstrate.framework/CydiaSubstrate \
+              output/SpotifyEQPro.dylib
+          fi
           install_name_tool -id @rpath/SpotifyEQPro.dylib output/SpotifyEQPro.dylib
 
           file output/SpotifyEQPro.dylib
