@@ -1,0 +1,38 @@
+name: Build SpotifyEQPro dylib
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Tweak.m"
+      - "Makefile"
+      - "SpotifyEQPro.plist"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Theos
+        uses: beerpiss/theos-action@v1
+        with:
+          theos-sdks: https://github.com/theos/sdks
+
+      - name: Build
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p output
+          DYLIB="$(find .theos/obj -name 'SpotifyEQPro.dylib' -type f | head -1)"
+          test -n "$DYLIB"
+          cp "$DYLIB" output/SpotifyEQPro.dylib
+          file output/SpotifyEQPro.dylib
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpotifyEQPro-dylib
+          path: output/SpotifyEQPro.dylib
+          if-no-files-found: error
