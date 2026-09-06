@@ -52,3 +52,6 @@ jobs:
             output/dependencies.txt
             output/commit.txt
           if-no-files-found: error
+      - name: Export portable artifact for test IPA assembly
+        run: |
+          python3 scripts/export_artifact.py output
