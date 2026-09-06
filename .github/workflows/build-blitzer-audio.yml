@@ -1,0 +1,49 @@
+name: Build BlitzerAudioFix jailed
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "BlitzerAudioFix/**"
+      - ".github/workflows/build-blitzer-audio.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: BlitzerAudioFix
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Theos
+        uses: beerpiss/theos-action@v1
+        with:
+          theos-sdks: https://github.com/theos/sdks
+      - name: Build and verify jailed library
+        run: |
+          make clean
+          make -j$(sysctl -n hw.ncpu) FINALPACKAGE=1
+          mkdir -p output
+          DYLIB="$(find .theos/obj -name 'BlitzerAudioFix.dylib' -type f | head -1)"
+          test -n "$DYLIB"
+          cp "$DYLIB" output/BlitzerAudioFix.dylib
+          install_name_tool -id @rpath/BlitzerAudioFix.dylib output/BlitzerAudioFix.dylib
+          codesign --force --sign - output/BlitzerAudioFix.dylib
+          file output/BlitzerAudioFix.dylib
+          otool -L output/BlitzerAudioFix.dylib | tee output/dependencies.txt
+          if grep -Ei 'substrate|substitute|libhooker|/var/jb|^[[:space:]]*/Library/Frameworks' output/dependencies.txt; then
+            echo "Jailbreak dependency found" >&2
+            exit 1
+          fi
+          printf '%s\n' "$GITHUB_SHA" > output/commit.txt
+      - name: Upload library
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlitzerAudioFix-${{ github.sha }}
+          path: BlitzerAudioFix/output/
+          if-no-files-found: error
+      - name: Export portable artifact
+        run: python3 scripts/export_artifact.py output
