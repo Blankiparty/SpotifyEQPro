@@ -38,7 +38,7 @@ jobs:
           codesign --force --sign - output/SpotifyEQPro.dylib
           file output/SpotifyEQPro.dylib
           otool -L output/SpotifyEQPro.dylib | tee output/dependencies.txt
-          if grep -Ei 'substrate|substitute|libhooker|/var/jb|/Library/Frameworks' output/dependencies.txt; then
+          if grep -Ei 'substrate|substitute|libhooker|/var/jb|^[[:space:]]*/Library/Frameworks' output/dependencies.txt; then
             echo "Jailbreak dependency found" >&2
             exit 1
           fi

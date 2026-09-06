@@ -64,7 +64,10 @@ static EQPStatus EQPConfigure(AudioUnit unit, EQPSettings settings, EQPStatus st
         EQPSetError(&status,AudioUnitSetProperty(unit,kAudioUnitProperty_BypassEffect,kAudioUnitScope_Global,0,&bypass,sizeof(bypass)));
     }
     if (status.error) {
-        // Fail to bypass, never leave a partially applied extreme preset audible.
+        // Disable individual bands too: the driver may subsequently set effect bypass.
+        AudioUnitSetParameter(unit,kAUNBandEQParam_GlobalGain,kAudioUnitScope_Global,0,0,0);
+        for (UInt32 i=0;i<count && i<EQP_BANDS;i++)
+            AudioUnitSetParameter(unit,kAUNBandEQParam_BypassBand+i,kAudioUnitScope_Global,0,1,0);
         UInt32 bypass=1;
         AudioUnitSetProperty(unit,kAudioUnitProperty_BypassEffect,kAudioUnitScope_Global,0,&bypass,sizeof(bypass));
     }
