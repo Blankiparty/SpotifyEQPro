@@ -1,10 +1,11 @@
-// SpotifyEQPro diagnostic v4
-// Stability-first build: no SPTEqualizerModel mutation. We only probe/hook the AudioUnit symbol.
+// SpotifyEQPro diagnostic v5
+// No Substrate, no global C hooks, no mutation of Spotify's EQ model.
+// We only inspect and (when safe) pass-through-hook applyEqualizerToAudioUnit: via Objective-C runtime.
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 #import <AudioToolbox/AudioToolbox.h>
-#import <substrate.h>
-#import <dlfcn.h>
 
 static NSString *LogPath(void) {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
@@ -25,61 +26,115 @@ static void LogLine(NSString *s) {
     }
 }
 
-static OSStatus (*OrigAudioUnitSetParameter)(AudioUnit,AudioUnitParameterID,AudioUnitScope,AudioUnitElement,AudioUnitParameterValue,UInt32) = NULL;
+static IMP gOrigApplyToUnit = NULL;
+static NSString *gLastVCName = nil;
 
-static BOOL IsNBandEQ(AudioUnit unit) {
-    if (!unit) return NO;
-    AudioComponent comp = AudioComponentInstanceGetComponent(unit);
-    if (!comp) return NO;
-    AudioComponentDescription d = {0};
-    if (AudioComponentGetDescription(comp, &d) != noErr) return NO;
-    return d.componentType == kAudioUnitType_Effect && d.componentSubType == kAudioUnitSubType_NBandEQ;
-}
-
-static OSStatus EQAudioUnitSetParameter(AudioUnit unit, AudioUnitParameterID pid,
-    AudioUnitScope scope, AudioUnitElement elem, AudioUnitParameterValue value, UInt32 offset) {
-
-    if (!OrigAudioUnitSetParameter) return kAudio_ParamError;
-
-    if (IsNBandEQ(unit)) {
-        // Log only the parameters Spotify actually drives; do not alter them in this diagnostic build.
-        if ((pid >= 2000 && pid < 2020) || (pid >= 3000 && pid < 3020) ||
-            (pid >= 4000 && pid < 4020) || (pid >= 5000 && pid < 5020)) {
-            LogLine([NSString stringWithFormat:@"NBandEQ set pid=%u value=%.3f scope=%u elem=%u",
-                     (unsigned)pid, value, (unsigned)scope, (unsigned)elem]);
+static UIViewController *TopVC(UIViewController *vc) {
+    if (!vc) return nil;
+    if (vc.presentedViewController) return TopVC(vc.presentedViewController);
+    if ([vc isKindOfClass:[UINavigationController class]])
+        return TopVC(((UINavigationController *)vc).visibleViewController);
+    if ([vc isKindOfClass:[UITabBarController class]])
+        return TopVC(((UITabBarController *)vc).selectedViewController);
+    for (UIViewController *child in vc.children) {
+        if (child.viewIfLoaded.window) {
+            UIViewController *t = TopVC(child);
+            if (t) return t;
         }
     }
-
-    return OrigAudioUnitSetParameter(unit,pid,scope,elem,value,offset);
+    return vc;
 }
 
-static void InstallAudioHook(void) {
-    LogLine(@"stage: resolving AudioUnitSetParameter");
-
-    void *sym = dlsym(RTLD_DEFAULT, "AudioUnitSetParameter");
-    LogLine([NSString stringWithFormat:@"dlsym AudioUnitSetParameter=%p", sym]);
-
-    if (!sym) {
-        LogLine(@"ERROR: dlsym failed; leaving audio unhooked");
-        return;
+static void LogVisibleController(void) {
+    UIWindow *key = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            if (w.isKeyWindow) { key = w; break; }
+        }
+        if (key) break;
     }
+    if (!key) key = UIApplication.sharedApplication.windows.firstObject;
+    UIViewController *top = TopVC(key.rootViewController);
+    NSString *name = top ? NSStringFromClass(top.class) : @"(none)";
+    if (![name isEqualToString:gLastVCName]) {
+        gLastVCName = [name copy];
+        LogLine([NSString stringWithFormat:@"visibleVC=%@", name]);
+    }
+}
 
-    MSHookFunction(sym, (void *)EQAudioUnitSetParameter, (void **)&OrigAudioUnitSetParameter);
-    if (OrigAudioUnitSetParameter)
-        LogLine([NSString stringWithFormat:@"stage: AudioUnit hook installed original=%p", OrigAudioUnitSetParameter]);
-    else
-        LogLine(@"ERROR: MSHookFunction returned NULL original; leaving diagnostic only");
+static void DumpEqualizerRuntime(void) {
+    Class c = NSClassFromString(@"SPTEqualizerModel");
+    if (!c) { LogLine(@"SPTEqualizerModel NOT FOUND"); return; }
+    LogLine(@"SPTEqualizerModel found");
+
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(c, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        SEL s = method_getName(methods[i]);
+        NSString *name = NSStringFromSelector(s);
+        if ([name localizedCaseInsensitiveContainsString:@"equalizer"] ||
+            [name localizedCaseInsensitiveContainsString:@"apply"] ||
+            [name localizedCaseInsensitiveContainsString:@"perform"] ||
+            [name localizedCaseInsensitiveContainsString:@"audioUnit"]) {
+            const char *types = method_getTypeEncoding(methods[i]);
+            LogLine([NSString stringWithFormat:@"method %@ types=%s", name, types ?: "(null)"]);
+        }
+    }
+    free(methods);
+
+    Ivar *ivars = class_copyIvarList(c, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        const char *n = ivar_getName(ivars[i]);
+        const char *t = ivar_getTypeEncoding(ivars[i]);
+        LogLine([NSString stringWithFormat:@"ivar %s type=%s", n ?: "?", t ?: "?"]);
+    }
+    free(ivars);
+}
+
+static void EQPApplyToUnit(id self, SEL cmd, void *unit) {
+    LogLine([NSString stringWithFormat:@"applyEqualizerToAudioUnit ENTER unit=%p", unit]);
+    if (gOrigApplyToUnit) ((void(*)(id,SEL,void *))gOrigApplyToUnit)(self, cmd, unit);
+    LogLine([NSString stringWithFormat:@"applyEqualizerToAudioUnit EXIT unit=%p", unit]);
+}
+
+static void InstallSafeApplyHook(void) {
+    Class c = NSClassFromString(@"SPTEqualizerModel");
+    SEL s = NSSelectorFromString(@"applyEqualizerToAudioUnit:");
+    Method m = c ? class_getInstanceMethod(c, s) : NULL;
+    if (!m) { LogLine(@"applyEqualizerToAudioUnit: method NOT FOUND"); return; }
+
+    const char *types = method_getTypeEncoding(m);
+    char *ret = method_copyReturnType(m);
+    char *arg = method_copyArgumentType(m, 2);
+    unsigned int argc = method_getNumberOfArguments(m);
+    LogLine([NSString stringWithFormat:@"candidate applyEqualizerToAudioUnit types=%s return=%s arg2=%s argc=%u",
+             types ?: "?", ret ?: "?", arg ?: "?", argc]);
+
+    BOOL safe = (argc == 3 && ret && ret[0] == 'v' && arg && arg[0] == '^');
+    if (safe) {
+        gOrigApplyToUnit = method_setImplementation(m, (IMP)EQPApplyToUnit);
+        LogLine(gOrigApplyToUnit ? @"PASS-THROUGH applyEqualizerToAudioUnit hook installed" : @"ERROR: original IMP NULL");
+    } else {
+        LogLine(@"SKIP hook: signature does not look like void(id,SEL,pointer)");
+    }
+    if (ret) free(ret); if (arg) free(arg);
 }
 
 __attribute__((constructor))
 static void SpotifyEQProInit(void) {
     @autoreleasepool {
-        LogLine(@"constructor entered - diagnostic v4 loaded");
-        LogLine(@"model hooks DISABLED to isolate prior crash loop");
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ InstallAudioHook(); });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ LogLine(@"stage: survived 10 seconds"); });
+        LogLine(@"constructor entered - diagnostic v5 loaded (NO SUBSTRATE)");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            DumpEqualizerRuntime();
+            InstallSafeApplyHook();
+            [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(__unused NSTimer *timer) {
+                LogVisibleController();
+            }];
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            LogLine(@"stage: survived 10 seconds v5");
+        });
     }
 }
